@@ -1,8 +1,18 @@
 #!/usr/bin/python
 
+import dbus
+import dbus.service
+import gobject
 import netifaces
 import socket
 import struct
+
+from dbus.mainloop.glib import DBusGMainLoop
+DBusGMainLoop(set_as_default=True)
+
+dbus_interface = 'de.yavdr.avahiwakeup'
+interface = 'eth0'
+hosts = {}
 
 
 def get_mac(interface):
@@ -27,6 +37,27 @@ def wake_on_lan(macaddress, broadcast):
   sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
   sock.sendto(send_data, (broadcast, 7))
 
-# mac = get_mac('eth0')
-# broadcast = get_broadcast_addr('eth0', netifaces.AF_INET)
-# wake_on_lan(mac, broadcast)
+
+class dbusHostService(dbus.service.Object):
+  def __init__(self, bus):
+    bus_name = dbus.service.BusName(dbus_interface, bus = bus)
+    dbus.service.Object.__init__(self, bus_name, '/host')
+
+  @dbus.service.method(dbus_interface, in_signature = 's', out_signature = 'b')
+  def WakeupHost(self, remote):
+    if remote not in hosts:
+      return False
+    broadcast = get_broadcast_addr(interface, netifaces.AF_INET)
+    if not broadcast:
+      return False
+    print "wake up " + remote + " with MAC " + hosts[remote] + " on broadcast address " + broadcast
+    wake_on_lan(hosts[remote], broadcast)
+    return True
+
+
+if __name__ == '__main__':
+  hostname = socket.gethostname()
+  hosts[hostname] = get_mac(interface)
+  hostService = dbusHostService(dbus.SystemBus())
+  print 'host ' + hostname + ' has MAC ' + hosts[hostname]
+  gobject.MainLoop().run()
