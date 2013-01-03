@@ -101,18 +101,22 @@ class AvahiService:
         self.name = name
         self.type = type
         self.port = port
+        self.group = None
 
     def Publish(self, txts):
         for txt in txts:
             print "publish: " + txt
-        if not hasattr(self, 'group'):
+        if not self.group:
+            print "create group"
             o = bus.get_object(avahi.DBUS_NAME, self.server.EntryGroupNew())
             self.group = dbus.Interface(o, avahi.DBUS_INTERFACE_ENTRY_GROUP)
         else:
             self.group.Reset()
-        self.group.AddService(avahi.IF_UNSPEC, avahi.PROTO_UNSPEC, dbus.UInt32(0),
-                         self.name, self.type, '', '', dbus.UInt16(self.port), txts)
-        self.group.Commit()
+        if self.group.IsEmpty():
+            print "add service"
+            self.group.AddService(avahi.IF_UNSPEC, avahi.PROTO_UNSPEC, dbus.UInt32(0),
+                             self.name, self.type, '', '', dbus.UInt16(self.port), txts)
+            self.group.Commit()
 
 
 def avahi_error_handler(*args):
