@@ -38,27 +38,51 @@ def wake_on_lan(macaddress, broadcast):
   sock.sendto(send_data, (broadcast, 7))
 
 
-class dbusHostService(dbus.service.Object):
+class HostService(dbus.service.Object):
   def __init__(self, bus):
     bus_name = dbus.service.BusName(dbus_interface, bus = bus)
     dbus.service.Object.__init__(self, bus_name, '/host')
 
   @dbus.service.method(dbus_interface, in_signature = 's', out_signature = 'b')
-  def WakeupHost(self, remote):
-    lowerRemote = remote.lower()
-    if lowerRemote not in hosts:
+  def Wakeup(self, host):
+    if not host:
+      return False
+    lowerHost = host.lower()
+    if lowerHost not in hosts:
       return False
     broadcast = get_broadcast_addr(interface, netifaces.AF_INET)
     if not broadcast:
       return False
-    print "wake up " + remote + " with MAC " + hosts[lowerRemote] + " on broadcast address " + broadcast
-    wake_on_lan(hosts[lowerRemote], broadcast)
+    print "wake up " + host + " with MAC " + hosts[lowerHost] + " on broadcast address " + broadcast
+    wake_on_lan(hosts[lowerHost], broadcast)
+    return True
+
+  @dbus.service.method(dbus_interface, in_signature = 'ss', out_signature = 'b')
+  def Add(self, host, mac):
+    if not host or not mac:
+      return False
+    lowerHost = host.lower()
+    print "add host " + host + " with MAC " + mac
+    hosts[lowerHost] = mac
+    print hosts
+    return True
+
+  @dbus.service.method(dbus_interface, in_signature = 's', out_signature = 'b')
+  def Remove(self, host):
+    if not host:
+      return False
+    lowerHost = host.lower()
+    if lowerHost not in hosts:
+      return False
+    print "remove host " + host
+    del hosts[lowerHost]
+    print hosts
     return True
 
 
 if __name__ == '__main__':
   hostname = socket.gethostname().lower()
   hosts[hostname] = get_mac(interface)
-  hostService = dbusHostService(dbus.SystemBus())
+  hostService = HostService(dbus.SystemBus())
   print 'host ' + hostname + ' has MAC ' + hosts[hostname]
   gobject.MainLoop().run()
