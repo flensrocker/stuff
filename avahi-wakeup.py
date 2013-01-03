@@ -11,12 +11,11 @@ import re
 
 from dbus.mainloop.glib import DBusGMainLoop
 
-service_type = '_wakeup._tcp'
+service_type = '_host-wakeup._tcp'
 service_port = 6666;
 
 dbus_interface = 'de.yavdr.avahiwakeup'
 interface = 'eth0'
-hosts = {}
 
 
 def get_mac(interface):
@@ -45,61 +44,75 @@ def wake_on_lan(macaddress, broadcast):
 class HostService(dbus.service.Object):
     def __init__(self, bus):
         bus_name = dbus.service.BusName(dbus_interface, bus = bus)
-        dbus.service.Object.__init__(self, bus_name, '/host')
+        dbus.service.Object.__init__(self, bus_name, '/Hosts')
+        self.Hosts = {}
 
     @dbus.service.method(dbus_interface, in_signature = 's', out_signature = 'b')
     def Wakeup(self, host):
         if not host:
             return False
         lowerHost = host.lower()
-        if lowerHost not in hosts:
+        if lowerHost not in self.Hosts:
             return False
         broadcast = get_broadcast_addr(interface, netifaces.AF_INET)
         if not broadcast:
             return False
-        print "wake up " + host + " with MAC " + hosts[lowerHost] + " on broadcast address " + broadcast
-        wake_on_lan(hosts[lowerHost], broadcast)
+        print "wake up " + host + " with MAC " + self.Hosts[lowerHost] + " on broadcast address " + broadcast
+        wake_on_lan(self.Hosts[lowerHost], broadcast)
         return True
 
     @dbus.service.method(dbus_interface, in_signature = 'ss', out_signature = 'b')
     def Add(self, host, mac):
         if not host or not mac:
             return False
-        lowerHost = host.lower()
-        lowerMac = mac.lower()
-        if (lowerHost in hosts) and (hosts[lowerHost] == lowerMac):
+        lowerHost = host.lower().encode('ascii', 'ignore')
+        lowerMac = mac.lower().encode('ascii', 'ignore')
+        if (lowerHost in self.Hosts) and (self.Hosts[lowerHost] == lowerMac):
             return False
         print "add host " + host + " with MAC " + mac
-        hosts[lowerHost] = lowerMac
-        print hosts
+        self.Hosts[lowerHost] = lowerMac
+        print self.Hosts
         return True
 
     @dbus.service.method(dbus_interface, in_signature = 's', out_signature = 'b')
     def Remove(self, host):
         if not host:
             return False
-        lowerHost = host.lower()
-        if lowerHost not in hosts:
+        lowerHost = host.lower().encode('ascii', 'ignore')
+        if lowerHost not in self.Hosts:
             return False
         print "remove host " + host
-        del hosts[lowerHost]
-        print hosts
+        del self.Hosts[lowerHost]
+        print self.Hosts
+        return True
+
+    @dbus.service.method(dbus_interface, in_signature = '', out_signature = 'b')
+    def Publish(self):
+        txts = []
+        for host in self.Hosts:
+            txts.append("host=%s,mac=%s" % (host, self.Hosts[host]))
+        avahiService.Publish(txts)
         return True
 
 
 class AvahiService:
-    def __init__(self, name, type, port, *txts):
+    def __init__(self, avahi_server, name, type, port):
+        self.server = avahi_server
         self.name = name
         self.type = type
         self.port = port
-        self.txts = txts
 
-    def Publish(self, avahi_server):
-        group = dbus.Interface(bus.get_object(avahi.DBUS_NAME, avahi_server.EntryGroupNew()), avahi.DBUS_INTERFACE_ENTRY_GROUP)
-        group.AddService(avahi.IF_UNSPEC, avahi.PROTO_UNSPEC, dbus.UInt32(0),
-                         self.name, self.type, '', '', dbus.UInt16(self.port), self.txts)
-        group.Commit()
-        self.group = group
+    def Publish(self, txts):
+        for txt in txts:
+            print "publish: " + txt
+        if not hasattr(self, 'group'):
+            o = bus.get_object(avahi.DBUS_NAME, self.server.EntryGroupNew())
+            self.group = dbus.Interface(o, avahi.DBUS_INTERFACE_ENTRY_GROUP)
+        else:
+            self.group.Reset()
+        self.group.AddService(avahi.IF_UNSPEC, avahi.PROTO_UNSPEC, dbus.UInt32(0),
+                         self.name, self.type, '', '', dbus.UInt16(self.port), txts)
+        self.group.Commit()
 
 
 def avahi_error_handler(*args):
@@ -121,13 +134,13 @@ def avahi_service_resolved(*args):
             if hostService.Add(host, mac):
                 publish = True
     if publish:
-        pass
+        hostService.Publish()
 
 def avahi_new_handler(interface, protocol, name, stype, domain, flags):
-    if flags & avahi.LOOKUP_RESULT_LOCAL:
-        pass
-    else:
-        avahi_server.ResolveService(interface, protocol, name, stype, 
+    # if flags & avahi.LOOKUP_RESULT_LOCAL:
+    #     pass
+    # else:
+    avahi_server.ResolveService(interface, protocol, name, stype, 
                 domain, avahi.PROTO_UNSPEC, dbus.UInt32(0), 
                 reply_handler = avahi_service_resolved, error_handler = avahi_error_handler)
 
@@ -135,18 +148,22 @@ def avahi_new_handler(interface, protocol, name, stype, domain, flags):
 if __name__ == '__main__':
     DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
-    hostname = socket.gethostname().lower()
-    hosts[hostname] = get_mac(interface)
-    hostService = HostService(bus)
-    print 'host ' + hostname + ' has MAC ' + hosts[hostname]
 
     avahi_server = dbus.Interface(bus.get_object(avahi.DBUS_NAME, avahi.DBUS_PATH_SERVER), avahi.DBUS_INTERFACE_SERVER)
+
+    hostname = socket.gethostname().lower()
+    mac = get_mac(interface)
+    hostService = HostService(bus)
+    hostService.Add(hostname, mac)
+    print 'host ' + hostname + ' has MAC ' + mac
+
     avahi_browser = dbus.Interface(bus.get_object(avahi.DBUS_NAME,
                     avahi_server.ServiceBrowserNew(avahi.IF_UNSPEC, avahi.PROTO_INET, service_type, 'local', dbus.UInt32(0))),
                     avahi.DBUS_INTERFACE_SERVICE_BROWSER)
     avahi_browser.connect_to_signal("ItemNew", avahi_new_handler)
 
-    avahiService = AvahiService('avahi-wakeup on ' + hostname, service_type, service_port, 'host=' + hostname + ',mac=' + hosts[hostname], 'host=' + hostname + '2,mac=' + hosts[hostname])
-    avahiService.Publish(avahi_server)
+    avahiService = AvahiService(avahi_server, 'avahi-wakeup on ' + hostname, service_type, service_port)
+    
+    hostService.Publish()
 
     gobject.MainLoop().run()
