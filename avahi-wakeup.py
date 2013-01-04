@@ -118,35 +118,47 @@ class AvahiService:
                              self.name, self.type, '', '', dbus.UInt16(self.port), txts)
             self.group.Commit()
 
+class AvahiBrowser:
+    def __init__(self, avahi_server, protocol, type):
+        self.avahi_server = avahi_server
+        self.browser = dbus.Interface(bus.get_object(avahi.DBUS_NAME,
+                        avahi_server.ServiceBrowserNew(avahi.IF_UNSPEC, protocol, type, '', dbus.UInt32(0))),
+                        avahi.DBUS_INTERFACE_SERVICE_BROWSER)
+        self.browser.connect_to_signal("ItemNew", self.new_handler)
 
-def avahi_error_handler(*args):
-    print 'avahi-error: ' + args[0]
+    def error_handler(self, *args):
+        print 'avahi-browser-error: ' + args[0]
 
-def avahi_service_resolved(*args):
-    name = args[2]
-    address = args[7]
-    port = args[8]
-    txts = args[9]
-    publish = False
-    for t in txts:
-        s = "".join(chr(b) for b in t)
-        match = re.search("host=(.+),mac=(.+)", s)
-        host = match.group(1)
-        mac = match.group(2)
-        if match and host:
-            print "found host %s with mac %s" % (host, mac)
-            if hostService.Add(host, mac):
-                publish = True
-    if publish:
-        hostService.Publish()
+    def service_resolved(self, *args):
+        name = args[2]
+        address = args[7]
+        port = args[8]
+        txts = args[9]
+        publish = False
+        for t in txts:
+            s = "".join(chr(b) for b in t)
+            match = re.search("host=(.+),mac=(.+)", s)
+            host = match.group(1)
+            mac = match.group(2)
+            if match and host:
+                print "found host %s with mac %s" % (host, mac)
+                if hostService.Add(host, mac):
+                    publish = True
+        if publish:
+            hostService.Publish()
 
-def avahi_new_handler(interface, protocol, name, stype, domain, flags):
-    # if flags & avahi.LOOKUP_RESULT_LOCAL:
-    #     pass
-    # else:
-    avahi_server.ResolveService(interface, protocol, name, stype, 
-                domain, avahi.PROTO_UNSPEC, dbus.UInt32(0), 
-                reply_handler = avahi_service_resolved, error_handler = avahi_error_handler)
+    def new_handler(self, interface, protocol, name, type, domain, flags):
+        # if flags & avahi.LOOKUP_RESULT_LOCAL:
+        #     pass
+        # else:
+        # avahi_server.ResolveService(interface, protocol, name, type, 
+        #            domain, avahi.PROTO_UNSPEC, dbus.UInt32(0), 
+        #            reply_handler = self.service_resolved, error_handler = self.error_handler)
+        
+        self.resolver = dbus.Interface(bus.get_object(avahi.DBUS_NAME,
+                        avahi_server.ServiceResolverNew(interface, protocol, name, type, domain, avahi.PROTO_UNSPEC, dbus.UInt32(0))),
+                        avahi.DBUS_INTERFACE_SERVICE_RESOLVER)
+        self.resolver.connect_to_signal("Found", self.service_resolved)
 
 
 if __name__ == '__main__':
@@ -161,11 +173,7 @@ if __name__ == '__main__':
     hostService.Add(hostname, mac)
     print 'host ' + hostname + ' has MAC ' + mac
 
-    avahi_browser = dbus.Interface(bus.get_object(avahi.DBUS_NAME,
-                    avahi_server.ServiceBrowserNew(avahi.IF_UNSPEC, avahi.PROTO_INET, service_type, 'local', dbus.UInt32(0))),
-                    avahi.DBUS_INTERFACE_SERVICE_BROWSER)
-    avahi_browser.connect_to_signal("ItemNew", avahi_new_handler)
-
+    avahiBrowser = AvahiBrowser(avahi_server, avahi.PROTO_INET, service_type)
     avahiService = AvahiService(avahi_server, 'avahi-wakeup on ' + hostname, service_type, service_port)
     
     hostService.Publish()
