@@ -14,7 +14,7 @@ from dbus.mainloop.glib import DBusGMainLoop
 service_type = '_host-wakeup._tcp'
 service_port = 6666;
 
-dbus_interface = 'de.yavdr.avahiwakeup'
+dbus_interface = 'de.yavdr.hostwakeup'
 interface = 'eth0'
 
 
@@ -103,13 +103,11 @@ class AvahiService:
         for txt in txts:
             print "publish: " + txt
         if not self.group:
-            print "create group"
             g = bus.get_object(avahi.DBUS_NAME, self.server.EntryGroupNew())
             self.group = dbus.Interface(g, avahi.DBUS_INTERFACE_ENTRY_GROUP)
         else:
             self.group.Reset()
         if self.group.IsEmpty():
-            print "add service"
             self.group.AddService(avahi.IF_UNSPEC, avahi.PROTO_UNSPEC, dbus.UInt32(0),
                                   self.name, self.type, '', '', dbus.UInt16(self.port), txts)
             self.group.Commit()
@@ -162,7 +160,7 @@ if __name__ == '__main__':
     print 'host ' + hostname + ' has MAC ' + mac
 
     avahiBrowser = AvahiBrowser(avahi_server, avahi.PROTO_INET, service_type)
-    avahiService = AvahiService(avahi_server, 'avahi-wakeup on ' + hostname, service_type, service_port)
+    avahiService = AvahiService(avahi_server, 'host-wakeup on ' + hostname, service_type, service_port)
     
     hostService.Publish()
 
