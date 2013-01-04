@@ -69,9 +69,7 @@ class HostService(dbus.service.Object):
         lowerMac = mac.lower().encode('ascii', 'ignore')
         if (lowerHost in self.Hosts) and (self.Hosts[lowerHost] == lowerMac):
             return False
-        print "add host " + host + " with MAC " + mac
         self.Hosts[lowerHost] = lowerMac
-        print self.Hosts
         return True
 
     @dbus.service.method(dbus_interface, in_signature = 's', out_signature = 'b')
@@ -81,9 +79,7 @@ class HostService(dbus.service.Object):
         lowerHost = host.lower().encode('ascii', 'ignore')
         if lowerHost not in self.Hosts:
             return False
-        print "remove host " + host
         del self.Hosts[lowerHost]
-        print self.Hosts
         return True
 
     @dbus.service.method(dbus_interface, in_signature = '', out_signature = 'b')
@@ -108,22 +104,22 @@ class AvahiService:
             print "publish: " + txt
         if not self.group:
             print "create group"
-            o = bus.get_object(avahi.DBUS_NAME, self.server.EntryGroupNew())
-            self.group = dbus.Interface(o, avahi.DBUS_INTERFACE_ENTRY_GROUP)
+            g = bus.get_object(avahi.DBUS_NAME, self.server.EntryGroupNew())
+            self.group = dbus.Interface(g, avahi.DBUS_INTERFACE_ENTRY_GROUP)
         else:
             self.group.Reset()
         if self.group.IsEmpty():
             print "add service"
             self.group.AddService(avahi.IF_UNSPEC, avahi.PROTO_UNSPEC, dbus.UInt32(0),
-                             self.name, self.type, '', '', dbus.UInt16(self.port), txts)
+                                  self.name, self.type, '', '', dbus.UInt16(self.port), txts)
             self.group.Commit()
+
 
 class AvahiBrowser:
     def __init__(self, avahi_server, protocol, type):
         self.avahi_server = avahi_server
-        self.browser = dbus.Interface(bus.get_object(avahi.DBUS_NAME,
-                        avahi_server.ServiceBrowserNew(avahi.IF_UNSPEC, protocol, type, '', dbus.UInt32(0))),
-                        avahi.DBUS_INTERFACE_SERVICE_BROWSER)
+        b = avahi_server.ServiceBrowserNew(avahi.IF_UNSPEC, protocol, type, '', dbus.UInt32(0))
+        self.browser = dbus.Interface(bus.get_object(avahi.DBUS_NAME, b), avahi.DBUS_INTERFACE_SERVICE_BROWSER)
         self.browser.connect_to_signal("ItemNew", self.new_handler)
 
     def error_handler(self, *args):
@@ -141,23 +137,15 @@ class AvahiBrowser:
             host = match.group(1)
             mac = match.group(2)
             if match and host:
-                print "found host %s with mac %s" % (host, mac)
                 if hostService.Add(host, mac):
+                    print "found host %s with mac %s" % (host, mac)
                     publish = True
         if publish:
             hostService.Publish()
 
     def new_handler(self, interface, protocol, name, type, domain, flags):
-        # if flags & avahi.LOOKUP_RESULT_LOCAL:
-        #     pass
-        # else:
-        # avahi_server.ResolveService(interface, protocol, name, type, 
-        #            domain, avahi.PROTO_UNSPEC, dbus.UInt32(0), 
-        #            reply_handler = self.service_resolved, error_handler = self.error_handler)
-        
-        self.resolver = dbus.Interface(bus.get_object(avahi.DBUS_NAME,
-                        avahi_server.ServiceResolverNew(interface, protocol, name, type, domain, avahi.PROTO_UNSPEC, dbus.UInt32(0))),
-                        avahi.DBUS_INTERFACE_SERVICE_RESOLVER)
+        r = avahi_server.ServiceResolverNew(interface, protocol, name, type, domain, avahi.PROTO_UNSPEC, dbus.UInt32(0))
+        self.resolver = dbus.Interface(bus.get_object(avahi.DBUS_NAME, r), avahi.DBUS_INTERFACE_SERVICE_RESOLVER)
         self.resolver.connect_to_signal("Found", self.service_resolved)
 
 
