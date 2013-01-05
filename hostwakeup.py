@@ -52,16 +52,15 @@ def wake_on_lan(macaddress, broadcast):
 
 
 class AvahiService:
-    def __init__(self, avahi_server, name, type, port):
+    def __init__(self, avahi_server, name, type, port, *subtypes):
         self.server = avahi_server
         self.name = name
         self.type = type
         self.port = port
+        self.subtypes = subtypes
         self.group = None
 
     def Publish(self, txts):
-        for txt in txts:
-            print "publish: " + txt
         if not self.group:
             g = bus.get_object(avahi.DBUS_NAME, self.server.EntryGroupNew())
             self.group = dbus.Interface(g, avahi.DBUS_INTERFACE_ENTRY_GROUP)
@@ -70,6 +69,11 @@ class AvahiService:
         if self.group.IsEmpty():
             self.group.AddService(avahi.IF_UNSPEC, avahi.PROTO_UNSPEC, dbus.UInt32(0),
                                   self.name, self.type, '', '', dbus.UInt16(self.port), txts)
+            for subtype in self.subtypes:
+                if not subtype.endswith("._sub." + self.type):
+                    subtype = subtype + "._sub." + self.type
+                self.group.AddServiceSubtype(avahi.IF_UNSPEC, avahi.PROTO_UNSPEC, dbus.UInt32(0),
+                                             self.name, self.type, '', subtype)
             self.group.Commit()
 
 
@@ -155,7 +159,9 @@ class HostService(dbus.service.Object):
     def Publish(self):
         txts = []
         for host in self.Hosts:
-            txts.append("host=%s,mac=%s" % (host, self.Hosts[host]))
+            txt = "host=%s,mac=%s" % (host, self.Hosts[host])
+            print "publish: " + txt
+            txts.append(txt)
         self.avahi_service.Publish(txts)
         return True
 
