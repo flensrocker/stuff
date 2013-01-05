@@ -27,13 +27,6 @@ def get_mac(interface):
 def get_broadcast_addr(interface):
     return netifaces.ifaddresses(interface)[netifaces.AF_INET][0]['broadcast']
 
-def get_all_broadcast_addresses():
-    addrs = []
-    for i in netifaces.interfaces():
-        if not i.startswith('lo'):
-            addrs.append(get_broadcast_addr(i))
-    return addrs
-
 def wake_on_lan(macaddress, broadcast):
     if len(macaddress) == 12:
         pass
@@ -101,7 +94,6 @@ class AvahiBrowser:
             mac = match.group(2)
             if match and host:
                 if self.host_service.Add(host, mac):
-                    print "found host %s with mac %s" % (host, mac)
                     publish = True
         if publish:
             self.host_service.Publish()
@@ -113,11 +105,12 @@ class AvahiBrowser:
 
 
 class HostService(dbus.service.Object):
-    def __init__(self, bus, avahi_service):
+    def __init__(self, bus, avahi_service, interface):
         bus_name = dbus.service.BusName(dbus_interface, bus = bus)
         dbus.service.Object.__init__(self, bus_name, '/Hosts')
         self.Hosts = {}
         self.avahi_service = avahi_service
+        self.interface = interface
 
     @dbus.service.method(dbus_interface, in_signature = 's', out_signature = 'b')
     def Wakeup(self, host):
@@ -126,12 +119,11 @@ class HostService(dbus.service.Object):
         lowerHost = host.lower()
         if lowerHost not in self.Hosts:
             return False
-        broadcast = get_all_broadcast_addresses()
+        broadcast = get_broadcast_addr(self.interface)
         if not broadcast:
             return False
-        for b in broadcast:
-            print "wake up " + host + " with MAC " + self.Hosts[lowerHost] + " on broadcast address " + b
-            wake_on_lan(self.Hosts[lowerHost], b)
+        print "wake up " + host + " with MAC " + self.Hosts[lowerHost] + " on broadcast address " + broadcast
+        wake_on_lan(self.Hosts[lowerHost], broadcast)
         return True
 
     @dbus.service.method(dbus_interface, in_signature = 'ss', out_signature = 'b')
@@ -142,6 +134,7 @@ class HostService(dbus.service.Object):
         lowerMac = mac.lower().encode('ascii', 'ignore')
         if (lowerHost in self.Hosts) and (self.Hosts[lowerHost] == lowerMac):
             return False
+        print "add host %s with mac %s" % (lowerHost, lowerMac)
         self.Hosts[lowerHost] = lowerMac
         return True
 
@@ -152,6 +145,7 @@ class HostService(dbus.service.Object):
         lowerHost = host.lower().encode('ascii', 'ignore')
         if lowerHost not in self.Hosts:
             return False
+        print "remove host %s" % (lowerHost)
         del self.Hosts[lowerHost]
         return True
 
@@ -203,7 +197,7 @@ if __name__ == '__main__':
     avahiService = AvahiService(avahi_server, 'host-wakeup on ' + hostname, service_type, service_port)
 
     mac = get_mac(mac_interface)
-    hostService = HostService(bus, avahiService)
+    hostService = HostService(bus, avahiService, mac_interface)
     hostService.Add(hostname, mac)
     print 'host ' + hostname + ' has MAC ' + mac + " on interface " + mac_interface
     hostService.Publish()
