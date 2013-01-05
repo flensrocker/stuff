@@ -10,13 +10,14 @@ import os
 import signal
 import re
 import socket
+import SocketServer
 import struct
 import sys
+import threading
 
 from dbus.mainloop.glib import DBusGMainLoop
 
 service_type = "_host-wakeup._tcp"
-service_port = 6666;
 
 dbus_interface = "de.yavdr.hostwakeup"
 mac_interface = "eth0"
@@ -189,6 +190,37 @@ class HostWakeupService(dbus.service.Object):
         return True
 
 
+# http://docs.python.org/2/library/socketserver.html
+class TcpServerRequestHandler(SocketServer.StreamRequestHandler):
+    def handle(self):
+        data = self.rfile.readline().strip().lower()
+        if data.startswith("wakeup "):
+            host = data[7:].strip()
+            if hostWakeupService.Wakeup(host):
+                self.wfile.write("wakeup " + host)
+            else:
+                self.wfile.write("unknown host " + host)
+        else:
+            self.wfile.write("unknown command " + data)
+
+
+class TcpServer(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
+    pass
+
+
+def StartTcpServer(host):
+    server = TcpServer((host, 0), TcpServerRequestHandler)
+    ip, port = server.server_address
+    serverThread = threading.Thread(target = server.serve_forever)
+    serverThread.daemon = True
+    serverThread.start()
+    return (server, serverThread, port)
+
+def StopTcpServer(server):
+    if server:
+        server.shutdown()
+
+
 def sig_term_handler(signum, frame):
     if signum == signal.SIGTERM:
         print "TERM: quitting"
@@ -228,8 +260,13 @@ if __name__ == "__main__":
     mac = get_mac(mac_interface)
     print "host " + hostname + " has MAC " + mac + " on interface " + mac_interface
 
+    (tcpServer, tcpThread, tcpPort) = StartTcpServer("")
+    if tcpPort != 0:
+        print "listening on port %d" % (tcpPort)
+
     avahi_server = dbus.Interface(bus.get_object(avahi.DBUS_NAME, avahi.DBUS_PATH_SERVER), avahi.DBUS_INTERFACE_SERVER)
-    avahiService = AvahiService(avahi_server, "host-wakeup on " + hostname, service_type, service_port)
+    avahiService = AvahiService(avahi_server, "host-wakeup on " + hostname, service_type, tcpPort)
+
     hostWakeupService = HostWakeupService(bus, avahiService, mac_interface)
     hostWakeupService.Add(hostname, mac)
 
@@ -244,4 +281,5 @@ if __name__ == "__main__":
         loop.run()
     except:
         pass
+    StopTcpServer(tcpServer)
     write_hosts(host_file, hostWakeupService.Hosts)
