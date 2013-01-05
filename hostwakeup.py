@@ -3,11 +3,14 @@
 import avahi
 import dbus
 import dbus.service
+import getopt
 import gobject
 import netifaces
+import signal
+import re
 import socket
 import struct
-import re
+import sys
 
 from dbus.mainloop.glib import DBusGMainLoop
 
@@ -15,14 +18,21 @@ service_type = '_host-wakeup._tcp'
 service_port = 6666;
 
 dbus_interface = 'de.yavdr.hostwakeup'
-interface = 'eth0'
+mac_interface = 'eth0'
 
 
 def get_mac(interface):
     return netifaces.ifaddresses(interface)[netifaces.AF_LINK][0]['addr'].lower()
 
-def get_broadcast_addr(interface, protocol):
-    return netifaces.ifaddresses(interface)[protocol][0]['broadcast']
+def get_broadcast_addr(interface):
+    return netifaces.ifaddresses(interface)[netifaces.AF_INET][0]['broadcast']
+
+def get_all_broadcast_addresses():
+    addrs = []
+    for i in netifaces.interfaces():
+        if not i.startswith('lo'):
+            addrs.append(get_broadcast_addr(i))
+    return addrs
 
 def wake_on_lan(macaddress, broadcast):
     if len(macaddress) == 12:
@@ -41,11 +51,69 @@ def wake_on_lan(macaddress, broadcast):
     sock.sendto(send_data, (broadcast, 7))
 
 
+class AvahiService:
+    def __init__(self, avahi_server, name, type, port):
+        self.server = avahi_server
+        self.name = name
+        self.type = type
+        self.port = port
+        self.group = None
+
+    def Publish(self, txts):
+        for txt in txts:
+            print "publish: " + txt
+        if not self.group:
+            g = bus.get_object(avahi.DBUS_NAME, self.server.EntryGroupNew())
+            self.group = dbus.Interface(g, avahi.DBUS_INTERFACE_ENTRY_GROUP)
+        else:
+            self.group.Reset()
+        if self.group.IsEmpty():
+            self.group.AddService(avahi.IF_UNSPEC, avahi.PROTO_UNSPEC, dbus.UInt32(0),
+                                  self.name, self.type, '', '', dbus.UInt16(self.port), txts)
+            self.group.Commit()
+
+
+class AvahiBrowser:
+    def __init__(self, avahi_server, host_service, protocol, type):
+        self.avahi_server = avahi_server
+        self.host_service = host_service
+        b = avahi_server.ServiceBrowserNew(avahi.IF_UNSPEC, protocol, type, '', dbus.UInt32(0))
+        self.browser = dbus.Interface(bus.get_object(avahi.DBUS_NAME, b), avahi.DBUS_INTERFACE_SERVICE_BROWSER)
+        self.browser.connect_to_signal("ItemNew", self.new_handler)
+
+    def error_handler(self, *args):
+        print 'avahi-browser-error: ' + args[0]
+
+    def service_resolved(self, *args):
+        name = args[2]
+        address = args[7]
+        port = args[8]
+        txts = args[9]
+        publish = False
+        for t in txts:
+            s = "".join(chr(b) for b in t)
+            match = re.search("host=(.+),mac=(.+)", s)
+            host = match.group(1)
+            mac = match.group(2)
+            if match and host:
+                if self.host_service.Add(host, mac):
+                    print "found host %s with mac %s" % (host, mac)
+                    publish = True
+        if publish:
+            self.host_service.Publish()
+
+    def new_handler(self, interface, protocol, name, type, domain, flags):
+        r = avahi_server.ServiceResolverNew(interface, protocol, name, type, domain, avahi.PROTO_UNSPEC, dbus.UInt32(0))
+        self.resolver = dbus.Interface(bus.get_object(avahi.DBUS_NAME, r), avahi.DBUS_INTERFACE_SERVICE_RESOLVER)
+        self.resolver.connect_to_signal("Found", self.service_resolved)
+
+
 class HostService(dbus.service.Object):
-    def __init__(self, bus):
+    def __init__(self, bus, avahi_service):
         bus_name = dbus.service.BusName(dbus_interface, bus = bus)
         dbus.service.Object.__init__(self, bus_name, '/Hosts')
         self.Hosts = {}
+        self.avahi_service = avahi_service
 
     @dbus.service.method(dbus_interface, in_signature = 's', out_signature = 'b')
     def Wakeup(self, host):
@@ -54,11 +122,12 @@ class HostService(dbus.service.Object):
         lowerHost = host.lower()
         if lowerHost not in self.Hosts:
             return False
-        broadcast = get_broadcast_addr(interface, netifaces.AF_INET)
+        broadcast = get_all_broadcast_addresses()
         if not broadcast:
             return False
-        print "wake up " + host + " with MAC " + self.Hosts[lowerHost] + " on broadcast address " + broadcast
-        wake_on_lan(self.Hosts[lowerHost], broadcast)
+        for b in broadcast:
+            print "wake up " + host + " with MAC " + self.Hosts[lowerHost] + " on broadcast address " + b
+            wake_on_lan(self.Hosts[lowerHost], b)
         return True
 
     @dbus.service.method(dbus_interface, in_signature = 'ss', out_signature = 'b')
@@ -87,81 +156,52 @@ class HostService(dbus.service.Object):
         txts = []
         for host in self.Hosts:
             txts.append("host=%s,mac=%s" % (host, self.Hosts[host]))
-        avahiService.Publish(txts)
+        self.avahi_service.Publish(txts)
         return True
 
 
-class AvahiService:
-    def __init__(self, avahi_server, name, type, port):
-        self.server = avahi_server
-        self.name = name
-        self.type = type
-        self.port = port
-        self.group = None
-
-    def Publish(self, txts):
-        for txt in txts:
-            print "publish: " + txt
-        if not self.group:
-            g = bus.get_object(avahi.DBUS_NAME, self.server.EntryGroupNew())
-            self.group = dbus.Interface(g, avahi.DBUS_INTERFACE_ENTRY_GROUP)
+def sig_term_handler(signum, frame):
+    if signum == signal.SIGTERM:
+        print "TERM: quitting"
+        if not loop:
+            sys.exit(0)
         else:
-            self.group.Reset()
-        if self.group.IsEmpty():
-            self.group.AddService(avahi.IF_UNSPEC, avahi.PROTO_UNSPEC, dbus.UInt32(0),
-                                  self.name, self.type, '', '', dbus.UInt16(self.port), txts)
-            self.group.Commit()
+            loop.quit()
 
-
-class AvahiBrowser:
-    def __init__(self, avahi_server, protocol, type):
-        self.avahi_server = avahi_server
-        b = avahi_server.ServiceBrowserNew(avahi.IF_UNSPEC, protocol, type, '', dbus.UInt32(0))
-        self.browser = dbus.Interface(bus.get_object(avahi.DBUS_NAME, b), avahi.DBUS_INTERFACE_SERVICE_BROWSER)
-        self.browser.connect_to_signal("ItemNew", self.new_handler)
-
-    def error_handler(self, *args):
-        print 'avahi-browser-error: ' + args[0]
-
-    def service_resolved(self, *args):
-        name = args[2]
-        address = args[7]
-        port = args[8]
-        txts = args[9]
-        publish = False
-        for t in txts:
-            s = "".join(chr(b) for b in t)
-            match = re.search("host=(.+),mac=(.+)", s)
-            host = match.group(1)
-            mac = match.group(2)
-            if match and host:
-                if hostService.Add(host, mac):
-                    print "found host %s with mac %s" % (host, mac)
-                    publish = True
-        if publish:
-            hostService.Publish()
-
-    def new_handler(self, interface, protocol, name, type, domain, flags):
-        r = avahi_server.ServiceResolverNew(interface, protocol, name, type, domain, avahi.PROTO_UNSPEC, dbus.UInt32(0))
-        self.resolver = dbus.Interface(bus.get_object(avahi.DBUS_NAME, r), avahi.DBUS_INTERFACE_SERVICE_RESOLVER)
-        self.resolver.connect_to_signal("Found", self.service_resolved)
+def parse_args(argv):
+    try:
+        opts, args = getopt.getopt(argv, "i:", ["interface"])
+    except getopt.GetoptError:
+        sys.exit(2)
+    for opt, arg in opts:
+        if opt in ("-i", "--interface"):
+            global mac_interface
+            mac_interface = arg
+            print "using interface " + mac_interface
 
 
 if __name__ == '__main__':
-    DBusGMainLoop(set_as_default=True)
-    bus = dbus.SystemBus()
+    signal.signal(signal.SIGTERM, sig_term_handler)
+    parse_args(sys.argv[1:])
 
-    avahi_server = dbus.Interface(bus.get_object(avahi.DBUS_NAME, avahi.DBUS_PATH_SERVER), avahi.DBUS_INTERFACE_SERVER)
+    if not mac_interface in netifaces.interfaces():
+        print "interface " + mac_interface + " not found"
+        sys.exit(1)
+
+    bus = dbus.SystemBus(mainloop = DBusGMainLoop())
+    loop = gobject.MainLoop()
 
     hostname = socket.gethostname().lower()
-    mac = get_mac(interface)
-    hostService = HostService(bus)
-    hostService.Add(hostname, mac)
-    print 'host ' + hostname + ' has MAC ' + mac
+    avahi_server = dbus.Interface(bus.get_object(avahi.DBUS_NAME, avahi.DBUS_PATH_SERVER), avahi.DBUS_INTERFACE_SERVER)
 
-    avahiBrowser = AvahiBrowser(avahi_server, avahi.PROTO_INET, service_type)
     avahiService = AvahiService(avahi_server, 'host-wakeup on ' + hostname, service_type, service_port)
-    
+
+    mac = get_mac(mac_interface)
+    hostService = HostService(bus, avahiService)
+    hostService.Add(hostname, mac)
+    print 'host ' + hostname + ' has MAC ' + mac + " on interface " + mac_interface
     hostService.Publish()
 
-    gobject.MainLoop().run()
+    avahiBrowser = AvahiBrowser(avahi_server, hostService, avahi.PROTO_INET, service_type)
+
+    loop.run()
