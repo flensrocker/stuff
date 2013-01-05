@@ -194,6 +194,7 @@ class HostWakeupService(dbus.service.Object):
 class TcpServerRequestHandler(SocketServer.StreamRequestHandler):
     def handle(self):
         data = self.rfile.readline().strip().lower()
+        print "recv: " + data
         if data.startswith("wakeup "):
             host = data[7:].strip()
             if hostWakeupService.Wakeup(host):
@@ -246,6 +247,7 @@ def parse_args(argv):
 
 
 if __name__ == "__main__":
+    gobject.threads_init()
     signal.signal(signal.SIGTERM, sig_term_handler)
     parse_args(sys.argv[1:])
 
