@@ -104,7 +104,7 @@ class AvahiBrowser:
         self.resolver.connect_to_signal("Found", self.service_resolved)
 
 
-class HostService(dbus.service.Object):
+class HostWakeupService(dbus.service.Object):
     def __init__(self, bus, avahi_service, interface):
         bus_name = dbus.service.BusName(dbus_interface, bus = bus)
         dbus.service.Object.__init__(self, bus_name, '/Hosts')
@@ -197,11 +197,11 @@ if __name__ == '__main__':
     avahiService = AvahiService(avahi_server, 'host-wakeup on ' + hostname, service_type, service_port)
 
     mac = get_mac(mac_interface)
-    hostService = HostService(bus, avahiService, mac_interface)
-    hostService.Add(hostname, mac)
     print 'host ' + hostname + ' has MAC ' + mac + " on interface " + mac_interface
-    hostService.Publish()
+    hostWakeupService = HostWakeupService(bus, avahiService, mac_interface)
+    hostWakeupService.Add(hostname, mac)
+    hostWakeupService.Publish()
 
-    avahiBrowser = AvahiBrowser(avahi_server, hostService, avahi.PROTO_INET, service_type)
+    avahiBrowser = AvahiBrowser(avahi_server, hostWakeupService, avahi.PROTO_INET, service_type)
 
     loop.run()
