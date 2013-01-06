@@ -104,18 +104,34 @@ class AvahiBrowser:
     def __init__(self, avahi_server, host_service, protocol, type):
         self.avahi_server = avahi_server
         self.host_service = host_service
+        self.net_lock = threading.Lock()
+        self.net_services = {}
         b = avahi_server.ServiceBrowserNew(avahi.IF_UNSPEC, protocol, type, "", dbus.UInt32(0))
         self.browser = dbus.Interface(bus.get_object(avahi.DBUS_NAME, b), avahi.DBUS_INTERFACE_SERVICE_BROWSER)
         self.browser.connect_to_signal("ItemNew", self.new_handler)
+        self.browser.connect_to_signal("ItemRemove", self.remove_handler)
 
-    def error_handler(self, *args):
-        print "avahi-browser-error: " + args[0]
+    def new_handler(self, interface, protocol, name, type, domain, flags):
+        r = avahi_server.ServiceResolverNew(interface, protocol, name, type, domain, avahi.PROTO_UNSPEC, dbus.UInt32(0))
+        self.resolver = dbus.Interface(bus.get_object(avahi.DBUS_NAME, r), avahi.DBUS_INTERFACE_SERVICE_RESOLVER)
+        self.resolver.connect_to_signal("Found", self.service_resolved)
 
-    def service_resolved(self, *args):
-        name = args[2]
-        address = args[7]
-        port = args[8]
-        txts = args[9]
+    def remove_handler(self, interface, protocol, name, type, domain, flags):
+        self.net_lock.acquire()
+        if name in self.net_services:
+            del self.net_services[name]
+        self.net_lock.release()
+
+    def service_resolved(self, interface, protocol, name, type, domain, host, aprotocol, address, port, txts, flags):
+        if not (flags & avahi.LOOKUP_RESULT_LOCAL):
+            self.net_lock.acquire()
+            if name not in self.net_services:
+                prot = socket.AF_INET
+                if protocol == avahi.PROTO_INET6:
+                    prot = socket.AF_INET6
+                self.net_services[name] = (host, address, port, prot)
+            self.net_lock.release()
+
         publish = False
         for t in txts:
             s = "".join(chr(b) for b in t)
@@ -128,10 +144,11 @@ class AvahiBrowser:
         if publish:
             self.host_service.Publish()
 
-    def new_handler(self, interface, protocol, name, type, domain, flags):
-        r = avahi_server.ServiceResolverNew(interface, protocol, name, type, domain, avahi.PROTO_UNSPEC, dbus.UInt32(0))
-        self.resolver = dbus.Interface(bus.get_object(avahi.DBUS_NAME, r), avahi.DBUS_INTERFACE_SERVICE_RESOLVER)
-        self.resolver.connect_to_signal("Found", self.service_resolved)
+    def get_net_services(self):
+        self.net_lock.acquire()
+        net_services = self.net_services.copy()
+        self.net_lock.release()
+        return net_services
 
 
 class HostWakeupService(dbus.service.Object):
@@ -142,8 +159,32 @@ class HostWakeupService(dbus.service.Object):
         self.avahi_service = avahi_service
         self.interface = interface
 
+    def SetAvahiBrowser(self, avahi_browser):
+        self.avahi_browser = avahi_browser
+
+    def CallTcpServer(self, address, port, protocol, message):
+        print "calling %s:%d: %s" % (address, port, message)
+        sock = socket.socket(protocol, socket.SOCK_STREAM)
+        sock.connect((address, port))
+        try:
+            sock.sendall(message)
+            response = sock.recv(1024)
+            print "received: {}".format(response)
+        finally:
+            sock.close()
+
     @dbus.service.method(dbus_interface, in_signature = "s", out_signature = "b")
     def Wakeup(self, host):
+        if self.InternWakeup(host):
+            return True
+        if self.avahi_browser:
+            net_services = self.avahi_browser.get_net_services()
+            for name in net_services:
+                (host, address, port, protocol) = net_services[name]
+                CallTcpServer(address, port, protocol)
+        return False
+
+    def InternWakeup(self, host):
         if not host:
             return False
         lowerHost = host.lower()
@@ -197,7 +238,7 @@ class TcpServerRequestHandler(SocketServer.StreamRequestHandler):
         print "recv: " + data
         if data.startswith("wakeup "):
             host = data[7:].strip()
-            if hostWakeupService.Wakeup(host):
+            if hostWakeupService.InternWakeup(host):
                 self.wfile.write("wakeup " + host)
             else:
                 self.wfile.write("unknown host " + host)
@@ -279,6 +320,7 @@ if __name__ == "__main__":
 
     hostWakeupService.Publish()
     avahiBrowser = AvahiBrowser(avahi_server, hostWakeupService, avahi.PROTO_INET, service_type)
+    hostWakeupService.SetAvahiBrowser(avahiBrowser)
     try:
         loop.run()
     except:
