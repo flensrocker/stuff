@@ -129,7 +129,7 @@ class AvahiBrowser:
                 prot = socket.AF_INET
                 if protocol == avahi.PROTO_INET6:
                     prot = socket.AF_INET6
-                self.net_services[name] = (host, address, port, prot)
+                self.net_services[name] = (address, port, prot)
             self.net_lock.release()
 
         publish = False
@@ -168,8 +168,6 @@ class HostWakeupService(dbus.service.Object):
         sock.connect((address, port))
         try:
             sock.sendall(message)
-            response = sock.recv(1024)
-            print "received: {}".format(response)
         finally:
             sock.close()
 
@@ -180,8 +178,8 @@ class HostWakeupService(dbus.service.Object):
         if self.avahi_browser:
             net_services = self.avahi_browser.get_net_services()
             for name in net_services:
-                (host, address, port, protocol) = net_services[name]
-                CallTcpServer(address, port, protocol)
+                (address, port, protocol) = net_services[name]
+                self.CallTcpServer(address, port, protocol, "wakeup %s" % (host))
         return False
 
     def InternWakeup(self, host):
