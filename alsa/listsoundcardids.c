@@ -7,14 +7,14 @@
  * listsoundcardids
  *
  * Outputs something like:
- * Intel (VT1708S Analog): hw:CARD=Intel,DEV=0
- * Intel (VT1708S Digital): hw:CARD=Intel,DEV=1
- * Intel (VT1708S HP): hw:CARD=Intel,DEV=2
- * NVidia (HDMI 0): hw:CARD=NVidia,DEV=3
- * NVidia (HDMI 1): hw:CARD=NVidia,DEV=7
+ * HDA Intel [Intel], VT1708S Analog: hw:CARD=Intel,DEV=0
+ * HDA Intel [Intel], VT1708S Digital: hw:CARD=Intel,DEV=1
+ * HDA Intel [Intel], VT1708S HP: hw:CARD=Intel,DEV=2
+ * HDA NVidia [NVidia], HDMI 0: hw:CARD=NVidia,DEV=3
+ * HDA NVidia [NVidia], HDMI 1: hw:CARD=NVidia,DEV=7
  */
 
-static int count_strings(char **Array)
+static int count_strings_in_array(char **Array)
 {
   int count = 0;
   if (Array == NULL)
@@ -36,7 +36,7 @@ static void free_array(char **Array)
   free(Array);
 }
 
-static void add_string(char ***Array, const char *String)
+static void add_string_to_array(char ***Array, const char *String)
 {
   int count = 0;
   if ((Array == NULL) || (String == NULL))
@@ -44,14 +44,14 @@ static void add_string(char ***Array, const char *String)
   if (*Array == NULL)
      *Array = malloc(2 * sizeof(char*));
   else {
-     count = count_strings(*Array);
+     count = count_strings_in_array(*Array);
      *Array = realloc(*Array, (count + 2) * sizeof(char*));
      }
   (*Array)[count] = strdup(String);
   (*Array)[count + 1] = NULL;
 }
 
-static int list_soundcard_ids(char ***CardId, char ***DeviceId, char ***AlsaAddress)
+static int list_soundcard_ids(char ***CardName, char ***CardId, char ***DeviceId, char ***AlsaAddress)
 {
   int count = 0;
   char       hw_name[16];
@@ -61,6 +61,7 @@ static int list_soundcard_ids(char ***CardId, char ***DeviceId, char ***AlsaAddr
   int        alsa_tmp = 0;
 
   int                  card_index = -1;
+  char                *card_name = NULL;
   const char          *card_id = NULL;
   snd_ctl_card_info_t *card_info;
 
@@ -68,6 +69,7 @@ static int list_soundcard_ids(char ***CardId, char ***DeviceId, char ***AlsaAddr
   const char          *device_id = "";
   snd_pcm_info_t      *pcm_info = NULL;
 
+  *CardName = NULL;
   *CardId = NULL;
   *DeviceId = NULL;
   *AlsaAddress = NULL;
@@ -89,6 +91,7 @@ static int list_soundcard_ids(char ***CardId, char ***DeviceId, char ***AlsaAddr
        if (snd_ctl_open(&handle, hw_name, 0) == 0) {
           if (snd_ctl_card_info(handle, card_info) == 0) {
              card_id = snd_ctl_card_info_get_id(card_info);
+             snd_card_get_name(card_index, &card_name);
 
              device_index = -1;
              do {
@@ -109,11 +112,14 @@ static int list_soundcard_ids(char ***CardId, char ***DeviceId, char ***AlsaAddr
                            }
                      alsa_address = malloc(alsa_len + sizeof(char));
                      snprintf(alsa_address, alsa_len, "hw:CARD=%s,DEV=%d", card_id, device_index);
-                     add_string(CardId, card_id);
-                     add_string(DeviceId, device_id);
-                     add_string(AlsaAddress, alsa_address);
-                     free(alsa_address);
+
+                     add_string_to_array(CardName, card_name);
+                     add_string_to_array(CardId, card_id);
+                     add_string_to_array(DeviceId, device_id);
+                     add_string_to_array(AlsaAddress, alsa_address);
                      count++;
+
+                     free(alsa_address);
                      }
                 } while (1);
              }
@@ -132,16 +138,18 @@ close:
 
 int main(int argc, char *argv[])
 {
+  char **CardName = NULL;
   char **CardId = NULL;
   char **DeviceId = NULL;
   char **AlsaAddress = NULL;
   int count = 0;
   int i = 0;
   
-  count = list_soundcard_ids(&CardId, &DeviceId, &AlsaAddress);
+  count = list_soundcard_ids(&CardName, &CardId, &DeviceId, &AlsaAddress);
   for (i = 0; i < count; i++)
-      printf("%s (%s): %s\n", CardId[i], DeviceId[i], AlsaAddress[i]);
+      printf("%s [%s], %s: %s\n", CardName[i], CardId[i], DeviceId[i], AlsaAddress[i]);
 
+  free_array(CardName);
   free_array(CardId);
   free_array(DeviceId);
   free_array(AlsaAddress);
