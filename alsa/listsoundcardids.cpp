@@ -3,17 +3,46 @@
 #include <jsoncpp/json.hpp>
 
 /* Compile:
- * g++ -o listsoundcardids listsoundcardids.c `pkg-config --cflags --libs alsa`
+ * g++ -o listsoundcardids listsoundcardids.cpp `pkg-config --cflags --libs alsa jsoncpp`
  *
  * Usage:
  * listsoundcardids
  *
  * Outputs something like:
- * HDA Intel [Intel], VT1708S Analog: hw:CARD=Intel,DEV=0
- * HDA Intel [Intel], VT1708S Digital: hw:CARD=Intel,DEV=1
- * HDA Intel [Intel], VT1708S HP: hw:CARD=Intel,DEV=2
- * HDA NVidia [NVidia], HDMI 0: hw:CARD=NVidia,DEV=3
- * HDA NVidia [NVidia], HDMI 1: hw:CARD=NVidia,DEV=7
+ * {
+ *    "cards" : [
+ *       {
+ *          "alsa_address" : "hw:CARD=Intel,DEV=0",
+ *          "card_id" : "Intel",
+ *          "card_name" : "HDA Intel",
+ *          "device_id" : "VT1708S Analog"
+ *       },
+ *       {
+ *          "alsa_address" : "hw:CARD=Intel,DEV=1",
+ *          "card_id" : "Intel",
+ *          "card_name" : "HDA Intel",
+ *          "device_id" : "VT1708S Digital"
+ *       },
+ *       {
+ *          "alsa_address" : "hw:CARD=Intel,DEV=2",
+ *          "card_id" : "Intel",
+ *          "card_name" : "HDA Intel",
+ *          "device_id" : "VT1708S HP"
+ *       },
+ *       {
+ *          "alsa_address" : "hw:CARD=NVidia,DEV=3",
+ *          "card_id" : "NVidia",
+ *          "card_name" : "HDA NVidia",
+ *          "device_id" : "HDMI 0"
+ *       },
+ *       {
+ *          "alsa_address" : "hw:CARD=NVidia,DEV=7",
+ *          "card_id" : "NVidia",
+ *          "card_name" : "HDA NVidia",
+ *          "device_id" : "HDMI 1"
+ *       }
+ *    ]
+ * }
  */
 
 static int list_soundcard_ids(Json::Value &Cards)
