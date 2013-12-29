@@ -1,14 +1,20 @@
 
+CFLAGS += $(shell pkg-config --cflags alsa jsoncpp)
+LIBS   += $(shell pkg-config --libs alsa jsoncpp)
+
 all: getsoundcardbyname listsoundcardids
 
 %.o: %.c
-	gcc -c $^ $(shell pkg-config --cflags alsa)
+	gcc -c $^ $(CFLAGS)
+
+%.o: %.cpp
+	g++ -c $^ $(CFLAGS)
 
 getsoundcardbyname: getsoundcardbyname.o
-	gcc -o $@ $< $(shell pkg-config --libs alsa)
+	gcc -o $@ $< $(LIBS)
 
 listsoundcardids: listsoundcardids.o
-	gcc -o $@ $< $(shell pkg-config --libs alsa)
+	g++ -o $@ $< $(LIBS)
 
 clean:
 	rm -f *.o getsoundcardbyname listsoundcardids
